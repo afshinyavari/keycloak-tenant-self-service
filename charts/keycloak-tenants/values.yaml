@@ -1,0 +1,40 @@
+# Label on tenant namespaces that names the realm the namespace may use.
+# Must be the same as in the keycloak-platform chart.
+tenantLabel: keycloak.lab/tenant-realm
+
+# The Keycloak connection (ClusterKeycloakInstance) the realms are created in.
+# Created by the keycloak-platform chart.
+clusterInstanceRef: ocp-01
+
+# Realm settings every tenant gets. A tenant's own realmDefinition is applied
+# on top and wins where both set the same field.
+defaultRealmDefinition:
+  enabled: true
+  sslRequired: external        # HTTPS required except from private networks
+  registrationAllowed: false   # users cannot sign themselves up
+  bruteForceProtected: true    # lock accounts after repeated failed logins
+
+# One entry per tenant. Adding an entry and upgrading the chart onboards a
+# tenant; removing it offboards the tenant and deletes its realm (unless
+# preserveRealm is set).
+#
+#   name:          namespace name, and the realm name unless realmName is set
+#   editorGroups:  OIDC groups whose members manage the realm. Written as the
+#                  cluster sees them, with the API server's group prefix
+#                  (oidc-groups:). Membership is managed in the identity provider.
+# Optional:
+#   editorUsers:   individual users (oidc-user:...), for example for break-glass
+#   realmName:     the realm's name in Keycloak; cannot be changed later
+#   realmDefinition: realm settings for this tenant only
+#   preserveRealm: true keeps the realm in Keycloak if the tenant is removed
+tenants:
+  - name: tenant-1
+    editorGroups:
+      - oidc-groups:tenant-1-editors
+    realmDefinition:
+      displayName: Tenant 1
+  - name: tenant-2
+    editorGroups:
+      - oidc-groups:tenant-2-editors
+    realmDefinition:
+      displayName: Tenant 2

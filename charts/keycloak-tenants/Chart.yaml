@@ -1,0 +1,5 @@
+apiVersion: v2
+name: keycloak-tenants
+description: Onboards tenants - per tenant a namespace, its Keycloak realm and the RBAC for its editors
+type: application
+version: 0.1.0

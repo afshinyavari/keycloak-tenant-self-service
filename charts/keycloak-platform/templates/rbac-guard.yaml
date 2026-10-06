@@ -1,0 +1,59 @@
+# RBAC guard: tenants cannot change who has access to their namespace.
+#
+# Why it is needed: whoever can create RoleBindings in a tenant namespace can
+# hand the tenant's Keycloak rights to other people, or to every logged-in user.
+# Tenants are given the built-in "edit" role, which cannot change Roles or
+# RoleBindings, so normally they cannot do this anyway. This policy is the
+# backstop for when someone gives a tenant the "admin" role by mistake: even
+# then, only platform identities can create, change or delete Roles and
+# RoleBindings in tenant namespaces.
+#
+# A rejected Role comes back as "is invalid" (HTTP 422), not "forbidden".
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ .Values.rbacGuard.name }}
+spec:
+  # If the policy cannot be evaluated, reject the request rather than let it
+  # through.
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["roles", "rolebindings"]
+  # Platform identities skip the policy entirely: cluster admins, the
+  # Kubernetes/OpenShift controllers that manage RBAC on their own (for example
+  # when a namespace is deleted), and the GitOps controller that onboards
+  # tenants. The lists are in values.yaml.
+  matchConditions:
+    - name: not-platform
+      expression: >-
+        !(
+          request.userInfo.groups.exists(g, g in {{ toJson .Values.rbacGuard.platformGroups | replace "\"" "'" }})
+          || {{ toJson .Values.rbacGuard.platformUserPrefixes | replace "\"" "'" }}.exists(p, request.userInfo.username.startsWith(p))
+          || request.userInfo.username in {{ toJson .Values.rbacGuard.platformUsers | replace "\"" "'" }}
+        )
+  # Everyone else is always denied.
+  validations:
+    - expression: "false"
+      messageExpression: >-
+        'Roles and RoleBindings in tenant namespace ' + namespaceObject.metadata.name +
+        ' are managed by the platform team'
+---
+# Turns the RBAC guard on in tenant namespaces only, recognised by the tenant
+# label. Applying it everywhere would block ordinary RBAC changes in the rest
+# of the cluster.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ .Values.rbacGuard.name }}
+spec:
+  policyName: {{ .Values.rbacGuard.name }}
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: {{ .Values.tenantLabel }}
+          operator: Exists

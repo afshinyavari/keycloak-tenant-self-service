@@ -1,0 +1,68 @@
+# Namespace the Keycloak operator runs in. The admin credentials live only here,
+# and it is the only namespace the realm guard does not apply to. Never put
+# tenant objects in this namespace.
+operatorNamespace: keycloak-operator
+
+# The Keycloak server the operator manages, and the admin login it uses.
+instance:
+  name: ocp-01
+  baseUrl: http://keycloak.keycloak.svc:8080
+  adminSecret:
+    name: keycloak-ocp-01-admin
+    username: admin
+    password: admin   # lab only; in a real cluster, supply it from a secret store
+  # Name of a ConfigMap (key ca.crt) in the operator namespace holding a custom
+  # CA for Keycloak's certificate. Leave empty for plain HTTP, as in the lab.
+  caConfigMap: ""
+
+# Label on tenant namespaces that names the realm the namespace may use.
+# Must be the same in the keycloak-tenants chart.
+tenantLabel: keycloak.lab/tenant-realm
+
+# The realm guard keeps tenants inside their own realm.
+realmGuard:
+  name: hostzero-tenant-realm-guard
+  # Kinds that are placed directly in a realm (they have clusterRealmRef or
+  # realmRef). Kinds placed through another object (credentials, role mappings,
+  # protocol mappers, identity provider mappers) need not be listed: they
+  # follow their parent object. Add new kinds here when the operator adds them.
+  resources:
+    - keycloakusers
+    - keycloakgroups
+    - keycloakroles
+    - keycloakclients
+    - keycloakclientscopes
+    - keycloakidentityproviders
+    - keycloakcomponents
+    - keycloakauthenticationflows
+    - keycloakrequiredactions
+    - keycloakorganizations
+
+# The platform-kinds guard stops anyone from creating Keycloak connections
+# (KeycloakInstance) or realms (KeycloakRealm) outside the operator namespace.
+platformKindsGuard:
+  name: hostzero-platform-kinds-guard
+
+# The RBAC guard stops anyone but the platform from changing Roles and
+# RoleBindings in tenant namespaces. The identities below are the platform and
+# are not affected.
+rbacGuard:
+  name: tenant-rbac-guard
+  # Cluster admin groups. system:masters is the built-in admin group (OpenShift),
+  # kubeadm:cluster-admins is the admin group on kubeadm clusters such as kind,
+  # oidc-groups:cluster-admin is the admin group from the identity provider.
+  platformGroups:
+    - system:masters
+    - kubeadm:cluster-admins
+    - oidc-groups:cluster-admin
+  # Service accounts of cluster components that create or delete RBAC on their
+  # own, for example when a namespace is created or deleted.
+  platformUserPrefixes:
+    - "system:serviceaccount:openshift-"
+    - "system:serviceaccount:kube-system:"
+  # Individual platform identities: the Kubernetes controller manager, and the
+  # Argo CD controller that applies the onboarding (already covered by the
+  # openshift- prefix, listed for clarity).
+  platformUsers:
+    - system:kube-controller-manager
+    - system:serviceaccount:openshift-gitops:openshift-gitops-argocd-application-controller

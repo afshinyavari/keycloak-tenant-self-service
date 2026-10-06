@@ -1,0 +1,53 @@
+# Lab Keycloak server. Dev mode: plain HTTP and an in-memory database, so all
+# realms are lost when the pod restarts (re-run ./up.sh). Not for production.
+
+# Namespace for the Keycloak server itself, separate from the operator.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+---
+# One Keycloak pod. The bootstrap admin (admin/admin) is the account the
+# operator logs in with; the keycloak-platform chart holds the same values.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: keycloak}
+  template:
+    metadata:
+      labels: {app: keycloak}
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.4
+          args: ["start-dev"]
+          env:
+            - {name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin}
+            - {name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: admin}
+            - {name: KC_HEALTH_ENABLED, value: "true"}
+          ports:
+            - {name: http, containerPort: 8080}   # admin console, admin API, logins
+            - {name: mgmt, containerPort: 9000}   # health endpoints
+          # The pod only receives traffic once Keycloak reports itself ready.
+          readinessProbe:
+            httpGet: {path: /health/ready, port: 9000}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+# Stable in-cluster address for Keycloak: http://keycloak.keycloak.svc:8080.
+# The operator connects here. From your machine, use
+# kubectl -n keycloak port-forward svc/keycloak 8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: keycloak
+spec:
+  selector: {app: keycloak}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}

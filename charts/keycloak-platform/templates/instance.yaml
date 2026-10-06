@@ -1,0 +1,43 @@
+# Admin credentials the operator uses to log in to Keycloak.
+# This is the only place Keycloak admin credentials exist in the cluster. It is
+# stored in the operator's own namespace, which tenants have no access to, so
+# no tenant can read it or use it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.instance.adminSecret.name }}
+  namespace: {{ .Values.operatorNamespace }}
+type: Opaque
+stringData:
+  username: {{ .Values.instance.adminSecret.username | quote }}
+  password: {{ .Values.instance.adminSecret.password | quote }}
+---
+# The connection to the Keycloak server: URL and which Secret to log in with.
+# Cluster-scoped, so realms created from any namespace can use it, while the
+# credentials themselves stay in the operator namespace. Only the platform team
+# can create or change connections; tenants cannot create their own.
+apiVersion: keycloak.hostzero.com/v1beta1
+kind: ClusterKeycloakInstance
+metadata:
+  name: {{ .Values.instance.name }}
+spec:
+  baseUrl: {{ .Values.instance.baseUrl }}
+  # The operator authenticates against the master realm, which can manage all
+  # other realms.
+  realm: master
+  auth:
+    passwordGrant:
+      secretRef:
+        name: {{ .Values.instance.adminSecret.name }}
+        namespace: {{ .Values.operatorNamespace }}
+        usernameKey: username
+        passwordKey: password
+  {{- with .Values.instance.caConfigMap }}
+  # Trust a custom CA when Keycloak's certificate is not signed by a public CA.
+  tls:
+    caCert:
+      configMapRef:
+        name: {{ . }}
+        namespace: {{ $.Values.operatorNamespace }}
+        key: ca.crt
+  {{- end }}

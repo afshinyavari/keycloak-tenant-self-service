@@ -1,0 +1,7 @@
+{{- /*
+Stops the install if a tenant has nobody who can manage it: every tenant needs
+at least one entry under editorGroups or editorUsers. Renders no objects.
+*/}}
+{{- range .Values.tenants }}
+{{- if not (or .editorGroups .editorUsers) }}{{ fail (printf "tenant %s has no editorGroups or editorUsers" .name) }}{{ end }}
+{{- end }}

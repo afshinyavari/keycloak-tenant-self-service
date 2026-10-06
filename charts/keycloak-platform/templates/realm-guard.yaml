@@ -1,0 +1,86 @@
+# Realm guard: keeps every tenant inside its own Keycloak realm.
+#
+# Why it is needed: RBAC can decide whether a user may create, for example, a
+# KeycloakUser, but it cannot look at which realm that user is created in. A
+# tenant allowed to create KeycloakUsers could otherwise point one at another
+# tenant's realm, or at the realm used to log in to the cluster.
+#
+# How it works: each tenant namespace has a label naming its realm. When an
+# object that is placed directly in a realm is created or changed, this policy
+# compares the realm the object points at with that label, and rejects the
+# request if they differ.
+#
+# Objects placed indirectly (a client role via clientRef, a nested group via
+# parentGroupRef, a password via userRef, and so on) are not listed here. The
+# operator only looks those references up in the object's own namespace, so
+# they always end up in the same realm as their parent.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ .Values.realmGuard.name }}
+spec:
+  # If the policy cannot be evaluated, reject the request rather than let it
+  # through.
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["keycloak.hostzero.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources:
+          {{- toYaml .Values.realmGuard.resources | nindent 10 }}
+  # Only check requests that can change which realm the object is in: creates,
+  # and updates that change spec. Updates that only touch metadata are skipped.
+  # Without this, the operator could not remove its finalizer from an object
+  # once a namespace's label had been removed, and the object could never be
+  # deleted. An unchanged spec was already checked when it was written, so
+  # skipping it lets nothing new through.
+  matchConditions:
+    - name: spec-written
+      expression: "request.operation == 'CREATE' || object.spec != oldObject.spec"
+  # The realm this namespace may use, read from the namespace label. Empty when
+  # the namespace has no label, that is, when it is not a tenant namespace.
+  variables:
+    - name: tenantRealm
+      expression: >-
+        has(namespaceObject.metadata.labels) &&
+        '{{ .Values.tenantLabel }}' in namespaceObject.metadata.labels
+          ? namespaceObject.metadata.labels['{{ .Values.tenantLabel }}']
+          : ''
+  validations:
+    # Rule 1: no references to namespaced realms (realmRef). Tenants must use
+    # the cluster-scoped realm the platform created for them.
+    - expression: "!has(object.spec.realmRef)"
+      message: "spec.realmRef (namespaced realm) is not allowed outside the operator namespace; use clusterRealmRef"
+    # Rule 2: only tenant namespaces (with the label) may reference a realm at all.
+    - expression: "!has(object.spec.clusterRealmRef) || variables.tenantRealm != ''"
+      messageExpression: >-
+        'namespace ' + namespaceObject.metadata.name +
+        ' is not onboarded for a Keycloak realm (label {{ .Values.tenantLabel }} is missing)'
+    # Rule 3: the referenced realm must be the one named on the namespace label.
+    - expression: "!has(object.spec.clusterRealmRef) || object.spec.clusterRealmRef.name == variables.tenantRealm"
+      messageExpression: "'spec.clusterRealmRef.name must be ' + variables.tenantRealm + ' in this namespace'"
+---
+# Turns the realm guard on, for every namespace except the operator's own.
+#
+# Deny by default: the guard applies everywhere, not just in tenant namespaces.
+# A namespace that is not onboarded therefore cannot reference any realm, even
+# if someone has been given rights to create Keycloak objects there by mistake.
+# The only way to open a namespace is for the platform team to set the label.
+#
+# It applies to cluster admins too. Platform-owned objects that need to reference
+# a realm belong in the operator namespace, which is excluded.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ .Values.realmGuard.name }}
+spec:
+  policyName: {{ .Values.realmGuard.name }}
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - {{ .Values.operatorNamespace }}

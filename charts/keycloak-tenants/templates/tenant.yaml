@@ -1,0 +1,93 @@
+{{- /*
+One set of objects per entry under "tenants" in values.yaml. Together they give
+a team its own Keycloak realm, which it manages with Kubernetes objects in its
+own namespace, without ever holding Keycloak admin credentials.
+*/}}
+{{- range .Values.tenants }}
+{{- $realm := .name }}
+---
+# The tenant's namespace. The team creates Keycloak objects for its realm here
+# (users, groups, roles, clients and so on), and the operator applies them to
+# Keycloak.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .name }}
+  labels:
+    # Names the only realm objects in this namespace may be placed in. The
+    # realm guard enforces it, and the RBAC guard uses it to recognise tenant
+    # namespaces. Tenants cannot change namespace labels, so only the platform
+    # team decides which realm a namespace belongs to.
+    {{ $.Values.tenantLabel }}: {{ $realm }}
+---
+# The tenant's realm in Keycloak. It is cluster-scoped and owned by the platform
+# team, so tenants cannot create, rename or delete realms; they can only fill
+# their own realm with content. Being cluster-scoped is also what lets tenant
+# objects reference it from the tenant namespace (spec.clusterRealmRef).
+apiVersion: keycloak.hostzero.com/v1beta1
+kind: ClusterKeycloakRealm
+metadata:
+  name: {{ $realm }}
+  {{- if .preserveRealm }}
+  annotations:
+    # Keep the realm, and everything in it, in Keycloak if this object is deleted.
+    keycloak.hostzero.com/preserve-resource: "true"
+  {{- end }}
+spec:
+  # Which Keycloak server, and which admin login, the operator uses.
+  clusterInstanceRef:
+    name: {{ $.Values.clusterInstanceRef }}
+  # The realm's name in Keycloak. Cannot be changed after creation.
+  realmName: {{ .realmName | default .name }}
+  # Realm settings: the defaults in values.yaml, with the tenant's own
+  # realmDefinition on top.
+  definition:
+    {{- toYaml (merge (deepCopy (.realmDefinition | default dict)) $.Values.defaultRealmDefinition) | nindent 4 }}
+---
+# What the tenant's editors may do in their namespace: manage everything inside
+# their realm, and the Secrets that go with it (passwords, client secrets).
+# Deliberately not included: Keycloak connections and realms (platform-owned)
+# and any RBAC objects. The rules are defined once in _helpers.tpl and rendered
+# into every tenant namespace, so all tenants get exactly the same rights.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keycloak-realm-editor
+  namespace: {{ .name }}
+rules:
+  {{- include "keycloak.realmEditorRules" $ | nindent 2 }}
+---
+# Gives the tenant's editors (an OIDC group, and optionally named users) the
+# Role above. A RoleBinding only grants rights in its own namespace, so the
+# editors cannot manage Keycloak objects anywhere else. Who is in the group is
+# managed in the identity provider, not here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keycloak-realm-editors
+  namespace: {{ .name }}
+subjects:
+  {{- include "keycloak.editorSubjects" . | trim | nindent 2 }}
+roleRef:
+  kind: Role
+  name: keycloak-realm-editor
+  apiGroup: rbac.authorization.k8s.io
+---
+# Gives the same editors ordinary workload rights in their namespace (Pods,
+# Deployments, Services, ConfigMaps and so on) through the built-in "edit" role.
+# It refers to a ClusterRole, but a RoleBinding limits it to this namespace.
+# Deliberately "edit" and not "admin": "edit" cannot change Roles or
+# RoleBindings, so the tenant cannot pass its rights on to others. Neither role
+# includes Keycloak objects; those come only from the Role above.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: namespace-editors
+  namespace: {{ .name }}
+subjects:
+  {{- include "keycloak.editorSubjects" . | trim | nindent 2 }}
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

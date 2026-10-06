@@ -1,0 +1,53 @@
+# Platform-kinds guard: Keycloak connections and realms can only be created in
+# the operator namespace (and as the cluster-scoped kinds, which only the
+# platform team can create).
+#
+# Why it is needed: a namespaced KeycloakRealm can point at the platform's
+# ClusterKeycloakInstance and set any realmName. The operator then uses the
+# platform's admin login to create that realm, or to take over an existing one,
+# including another tenant's realm or the master realm. A namespaced
+# KeycloakInstance would let anyone add their own connection. Tenants do not
+# get these kinds in their Role, but anything with broader rights in a tenant
+# namespace, such as a GitOps controller syncing a tenant's repository, could
+# still create them. This policy blocks them regardless of who sends the request.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ .Values.platformKindsGuard.name }}
+spec:
+  # If the policy cannot be evaluated, reject the request rather than let it
+  # through.
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["keycloak.hostzero.com"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["keycloakrealms", "keycloakinstances"]
+  # Same reasoning as the realm guard: let metadata-only updates through, so the
+  # operator can still remove its finalizer from objects that already exist.
+  matchConditions:
+    - name: spec-written
+      expression: "request.operation == 'CREATE' || object.spec != oldObject.spec"
+  validations:
+    - expression: "false"
+      messageExpression: >-
+        request.kind.kind + ' is managed by the platform team and cannot be created in namespace ' +
+        namespaceObject.metadata.name
+---
+# Turns the guard on in every namespace except the operator's own, for everyone,
+# cluster admins included.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ .Values.platformKindsGuard.name }}
+spec:
+  policyName: {{ .Values.platformKindsGuard.name }}
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - {{ .Values.operatorNamespace }}
