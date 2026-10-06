@@ -9,15 +9,7 @@ This repository holds two Helm charts that implement this with the
 proves it: a local kind cluster, Keycloak, and a test suite that tries to break the
 isolation.
 
-```bash
-./up.sh                                                          # kind cluster, Keycloak, operator, both charts
-uv run --with-requirements tests/requirements.txt pytest tests   # the tests
-./down.sh
-```
-
-Requires Docker, kind, kubectl, helm and [uv](https://docs.astral.sh/uv/) (which fetches
-Python packages for the tests). Keycloak admin console:
-`kubectl -n keycloak port-forward svc/keycloak 8080`, then http://localhost:8080 (admin/admin).
+See [Running the lab and the tests](#running-the-lab-and-the-tests) to try it yourself.
 
 ## Requirements
 
@@ -114,7 +106,103 @@ person who pushed to Git. If tenants deploy through Argo CD:
 - The admission policies hold for every identity, with one gap that only Argo CD can
   close: an object written into another tenant's namespace with that tenant's own realm.
 
-## Tests
+## Running the lab and the tests
+
+### 1. Install the tools
+
+| Tool | What it is for | Install |
+|---|---|---|
+| Docker | Runs the kind cluster | https://docs.docker.com/engine/install/ |
+| kind | Kubernetes cluster in Docker | https://kind.sigs.k8s.io/docs/user/quick-start/#installation |
+| kubectl | Talks to the cluster | https://kubernetes.io/docs/tasks/tools/ |
+| helm | Installs the operator and the charts | https://helm.sh/docs/intro/install/ |
+| uv | Runs the Python tests and fetches their packages | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+
+You do not need to install Python packages yourself: uv downloads pytest and requests
+(listed in `tests/requirements.txt`) into a cache the first time the tests run. uv uses
+the Python already on the machine, or downloads one if there is none.
+
+Check that everything is in place:
+
+```bash
+docker info >/dev/null && kind version && kubectl version --client && helm version && uv --version
+```
+
+### 2. Start the lab
+
+```bash
+git clone https://github.com/afshinyavari/keycloak-tenant-self-service.git
+cd keycloak-tenant-self-service
+./up.sh
+```
+
+`up.sh` takes a few minutes the first time. It creates a kind cluster called
+`keycloak-lab`, starts Keycloak in it, installs the Hostzero operator and both charts, and
+waits until the realms tenant-1 and tenant-2 exist. It also switches kubectl to the lab
+cluster (context `kind-keycloak-lab`). It is safe to run again.
+
+### 3. Run the tests
+
+```bash
+uv run --with-requirements tests/requirements.txt pytest tests
+```
+
+The whole suite takes about a minute and a half. Every test is listed by name with
+`PASSED` or `FAILED`, and a summary of any failures is printed at the end:
+
+```
+tests/test_r2_realm_isolation.py::test_cannot_point_at_master_realm PASSED   [ 34%]
+...
+======================== 73 passed in 85.29s ========================
+```
+
+The tests run against whatever cluster kubectl points at, so make sure it is the lab:
+`kubectl config current-context` should print `kind-keycloak-lab`. They clean up after
+themselves and can be run as often as you like.
+
+To run only some of the tests:
+
+```bash
+# one file (one requirement)
+uv run --with-requirements tests/requirements.txt pytest tests/test_r8_rbac.py
+
+# every test with "master" in its name
+uv run --with-requirements tests/requirements.txt pytest tests -k master
+
+# one test, with the full error output if it fails
+uv run --with-requirements tests/requirements.txt pytest tests/test_r6_day2.py::test_offboarding_a_namespace_with_objects_left --tb=long
+```
+
+### 4. Look around (optional)
+
+Keycloak's admin console shows the realms and what the tests created in them:
+
+```bash
+kubectl -n keycloak port-forward svc/keycloak 8080
+```
+
+Then open http://localhost:8080 and log in as admin / admin.
+
+### 5. Stop the lab
+
+```bash
+./down.sh
+```
+
+This deletes the kind cluster and everything in it.
+
+### If something goes wrong
+
+- **Many tests fail with "not found" or time out after a restart of your machine.** Keycloak
+  keeps its data in memory, so the realms are gone when its pod restarts. Run `./up.sh`
+  again.
+- **`connection refused` from kubectl.** The cluster is not running, or kubectl points at
+  another cluster. Run `./up.sh`, or `kubectl config use-context kind-keycloak-lab`.
+- **A test fails with "denied, but for the wrong reason".** The request was rejected, but
+  not by the check the test is about. The full error message is printed below it; usually
+  the test's manifest is missing a field after an operator upgrade.
+
+### How the tests are written
 
 Each test is a Python function whose docstring explains what it checks and why. For
 example, from `tests/test_r2_realm_isolation.py`:
@@ -126,9 +214,14 @@ def test_cannot_point_at_master_realm():
     assert_denied(TENANT1.apply(evil, namespace="tenant-1"), because=WRONG_REALM)
 ```
 
-`assert_denied` also checks *why* the request was rejected, so a test with a typo in its
-manifest fails instead of passing by accident. Run one file or one test with
-`... pytest tests/test_r8_rbac.py` or `... pytest tests -k master`.
+- `TENANT1` is a developer in tenant-1. The tests act as them through kubectl
+  impersonation, so the request goes through the same RBAC and admission checks as for a
+  real user. `PLATFORM` is the cluster admin.
+- `assert_denied` checks that the request was rejected, and *why*, so a test with a
+  mistake in its manifest fails instead of passing by accident.
+- The `keycloak` fixture reads Keycloak's admin API, to check where objects really landed.
+- The helpers are in `tests/lab.py`; shared setup, such as the objects tenant-1 and
+  tenant-2 own, is in `tests/conftest.py`.
 
 ## Lab setup
 
