@@ -1,2 +1,4 @@
 # Internal design document, not published
 tenant-self-service-keycloak.md
+__pycache__/
+.pytest_cache/

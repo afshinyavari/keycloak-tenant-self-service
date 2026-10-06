@@ -10,12 +10,13 @@ proves it: a local kind cluster, Keycloak, and a test suite that tries to break 
 isolation.
 
 ```bash
-./up.sh               # kind cluster, Keycloak, operator, both charts
-tests/run-tests.sh    # requirement tests, tenants simulated with kubectl --as
+./up.sh                                                          # kind cluster, Keycloak, operator, both charts
+uv run --with-requirements tests/requirements.txt pytest tests   # the tests
 ./down.sh
 ```
 
-Requires Docker, kind, kubectl, helm, jq and curl. Keycloak admin console:
+Requires Docker, kind, kubectl, helm and [uv](https://docs.astral.sh/uv/) (which fetches
+Python packages for the tests). Keycloak admin console:
 `kubectl -n keycloak port-forward svc/keycloak 8080`, then http://localhost:8080 (admin/admin).
 
 ## Requirements
@@ -30,7 +31,7 @@ Requires Docker, kind, kubectl, helm, jq and curl. Keycloak admin console:
 | R6 | Deleting or editing an object does the expected thing, and there is a way to keep a Keycloak object when its Kubernetes object goes away. |
 | R8 | Tenants cannot create, change or delete Roles or RoleBindings in their namespace, so they cannot pass their rights on. |
 
-The test sections in `tests/run-tests.sh` are named after these IDs.
+The test files in `tests/` are named after these IDs.
 
 ## How it works
 
@@ -38,7 +39,7 @@ The test sections in `tests/run-tests.sh` are named after these IDs.
 |---|---|
 | `charts/keycloak-platform` | The Keycloak connection (ClusterKeycloakInstance) and its admin Secret, plus three admission policies |
 | `charts/keycloak-tenants` | Per tenant in `values.yaml`: a labelled Namespace, its ClusterKeycloakRealm, the `keycloak-realm-editor` Role and the RoleBindings for the tenant's editors |
-| `tests/run-tests.sh` | Checks against the API server and the Keycloak admin API |
+| `tests/` | pytest tests against the API server and the Keycloak admin API, one file per requirement; helpers in `lab.py` |
 | `kind/`, `keycloak/` | Cluster config and the lab Keycloak Deployment |
 
 - **The platform owns the realms.** Each tenant's realm is a cluster-scoped
@@ -112,6 +113,22 @@ person who pushed to Git. If tenants deploy through Argo CD:
   `KeycloakInstance` blacklisted.
 - The admission policies hold for every identity, with one gap that only Argo CD can
   close: an object written into another tenant's namespace with that tenant's own realm.
+
+## Tests
+
+Each test is a Python function whose docstring explains what it checks and why. For
+example, from `tests/test_r2_realm_isolation.py`:
+
+```python
+def test_cannot_point_at_master_realm():
+    """tenant-1 points a user at the master realm, the one that controls all of Keycloak."""
+    evil = keycloak_object("KeycloakUser", "evil", **in_realm("master"), username="evil")
+    assert_denied(TENANT1.apply(evil, namespace="tenant-1"), because=WRONG_REALM)
+```
+
+`assert_denied` also checks *why* the request was rejected, so a test with a typo in its
+manifest fails instead of passing by accident. Run one file or one test with
+`... pytest tests/test_r8_rbac.py` or `... pytest tests -k master`.
 
 ## Lab setup
 
