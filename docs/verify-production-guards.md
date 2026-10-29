@@ -97,21 +97,44 @@ namespace is not onboarded (label missing).
 
 ## 3. The open question: can a project admin change the label through the project API?
 
-Needs a user who is admin in a project without the label (for example through its group).
-Still a dry-run, nothing changes.
+Needs an identity that is admin in a project without the label. Make one: a namespace, a
+made-up group bound to `admin` there, and impersonation of that group. The label commands
+are dry-runs, nothing changes.
 
 ```bash
-oc --as=<user> --as-group=<group> label project <project> keycloak/tenant=team-a --dry-run=server
+oc create ns guard-test-c
+oc create rolebinding guard-test-admin -n guard-test-c --clusterrole=admin --group=guard-test-admins
 ```
 
-Expected if the model holds: `Error from server (Forbidden)`. If it says
-`labeled (server dry run)`, any project admin can point their namespace at any realm, and a
-guard on namespace labels is needed.
+Through the project API (the open question):
+
+```bash
+oc --as=guard-test-user --as-group=guard-test-admins label project guard-test-c keycloak/tenant=team-a --dry-run=server
+```
+
+Through the namespace API (expected closed, for comparison):
+
+```bash
+oc --as=guard-test-user --as-group=guard-test-admins label namespace guard-test-c keycloak/tenant=team-a --dry-run=server
+```
+
+Expected if the model holds: `Error from server (Forbidden)` on both. If the project line
+says `labeled (server dry run)`, any project admin can point their namespace at any realm,
+and a guard on namespace labels is needed.
+
+If the project line is refused, also check that the group really is admin there, so the
+refusal is not a typo in the group name:
+
+```bash
+oc --as=guard-test-user --as-group=guard-test-admins auth can-i create pods -n guard-test-c
+```
+
+Expected: `yes`.
 
 ## 4. Clean up
 
 ```bash
-oc delete ns guard-test-a guard-test-b
+oc delete ns guard-test-a guard-test-b guard-test-c
 ```
 
 ## Results
