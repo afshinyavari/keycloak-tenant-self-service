@@ -145,4 +145,4 @@ oc delete ns guard-test-a guard-test-b guard-test-c
 | 1 namespaced KeycloakRealm refused | denied: "KeycloakRealm is managed by the platform team and cannot be created in namespace guard-test-a" | 2026-10-29 |
 | 2 other realm refused | denied: "must be team-a in this namespace" | 2026-10-29 |
 | 3 unlabelled namespace refused | denied: "guard-test-c is not onboarded for a Keycloak realm" | 2026-10-29 |
-| 3b project API label change refused | not yet run | |
+| 3b project API label change refused | project API: "field is immutable, try updating the namespace" (labels cannot be changed through projects at all); namespace API: Forbidden; canary `can-i create pods`: yes | 2026-10-29 |
