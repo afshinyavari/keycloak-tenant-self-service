@@ -270,45 +270,43 @@ EOF
 
 Expected: rejected with `unknown field "spec.clientRef.namespace"`.
 
-## 14. What a tenant repository can bring in through the tenant Argo controller
+## 14. A tenant repository cannot write into another tenant's namespace through the shared controller
 
-Control: **the AppProject blacklist, which is not configured today**. Status: **open**.
-RBAC verified 2026-10-29: the controller may create Role, RoleBinding and the argoproj.io
-kinds, may not create ResourceQuota or LimitRange. The guards stop the Keycloak platform
-kinds. The dry-runs below show what the API server accepts from the controller with no
-AppProject in the way; `created (server dry run)` means only an AppProject can stop it.
+Control: the AppProject per team, with `destinations` limited to the team's own namespaces
+and `clusterResourceWhitelist: []`. **Not configured today.** Status: **open**.
+
+Why this is in scope: the tenant controller holds `admin` in every managed namespace, also
+other tenants'. A manifest in team A's repository with `metadata.namespace` set to one of
+team B's namespaces and `clusterRealmRef: team-b` is applied by the controller in team B's
+namespace, where the label says team-b, so the realm guard accepts it. Neither guard can
+see this: the API server sees a trusted identity writing a correctly labelled namespace.
+Only the AppProject's `destinations` stop it. (Verified 2026-10-29 that the controller has
+no cluster-wide rights, so cluster-scoped objects are already out of reach; the whitelist
+is belt and braces.)
+
+Out of scope for Keycloak: Role, RoleBinding, argoproj.io kinds, ResourceQuota and
+LimitRange from a tenant repository. With `admin` the tenant's own users can already create
+Roles and RoleBindings interactively, and the escalation check keeps everything inside the
+namespace and below `admin`; the damage stays in the tenant's own namespace and realm. A
+`namespaceResourceBlacklist` is therefore optional; `argoproj.io` kinds are cheap to list
+and remove the risk of tenants bootstrapping their own Applications if
+apps-in-any-namespace is ever enabled.
+
+This cannot be shown with a dry-run against the API server, because the AppProject is
+enforced by Argo CD, not by Kubernetes. Verify the AppProject objects instead:
 
 ```bash
-oc --as=$SA create rolebinding share -n kafka-cluster --clusterrole=admin --group=system:authenticated --dry-run=server   # created: OPEN
-oc --as=$SA create role extra -n kafka-cluster --verb=get --resource=pods --dry-run=server                               # created: OPEN
-oc --as=$SA create quota q -n kafka-cluster --hard=pods=1 --dry-run=server                                               # Forbidden
-cat <<EOF | oc --as=$SA apply --dry-run=server -n kafka-cluster -f -
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: coverage-check
-spec:
-  project: default
-  source:
-    repoURL: https://example.com/repo.git
-    path: .
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: kafka-cluster
-EOF
+oc get appproject -n <tenant-argo-ns> -o custom-columns='NAME:.metadata.name,DESTINATIONS:.spec.destinations[*].namespace,CLUSTER:.spec.clusterResourceWhitelist'
 ```
 
-Expected today: the first two and the Application are created (server dry run); the quota
-is Forbidden. To close: an AppProject per team with `namespaceResourceBlacklist` for
-`rbac.authorization.k8s.io/Role`, `rbac.authorization.k8s.io/RoleBinding`,
-`argoproj.io/Application`, `argoproj.io/ApplicationSet`, `argoproj.io/AppProject`, and
-`clusterResourceWhitelist: []`. ResourceQuota, LimitRange, KeycloakRealm and
-KeycloakInstance are already stopped by RBAC and the guards; listing them too costs nothing.
-Re-run these commands after the AppProject exists: they will still say `created`, because
-the AppProject is enforced by Argo CD, not by the API server. Verify the AppProject instead:
+Expected: every project lists only its own team's namespaces; the CLUSTER column is empty.
+
+What the API server lets the controller do today, for the record (all `created (server dry run)`
+or Forbidden as noted; none of it crosses a realm):
 
 ```bash
-oc get appproject -n <tenant-argo-ns> -o yaml | grep -A12 namespaceResourceBlacklist
+oc --as=$SA create rolebinding share -n kafka-cluster --clusterrole=admin --group=system:authenticated --dry-run=server   # created: inside the namespace
+oc --as=$SA create quota q -n kafka-cluster --hard=pods=1 --dry-run=server                                               # Forbidden
 ```
 
 ## 15. The tenant controller has nothing cluster-wide
@@ -381,7 +379,7 @@ oc delete ns guard-test-a guard-test-b guard-test-c
 | 11 | tenant admin cannot change label | verified (project admin, controller) | | |
 | 12 | sharing inside namespace only | reasoned | | |
 | 13 | indirect refs cannot name a namespace | reasoned | | |
-| 14 | tenant repo: Role/RoleBinding/Argo kinds | **open, no AppProject blacklist** | | |
+| 14 | tenant repo cannot write into another tenant's namespace | **open, no AppProject destinations yet** | | |
 | 15 | controller nothing cluster-wide | verified | | |
 | 16 | instance secretRef reaches any namespace | reasoned | | |
 | 17 | operator version | reasoned | | |
