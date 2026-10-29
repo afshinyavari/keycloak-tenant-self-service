@@ -273,7 +273,8 @@ Expected: rejected with `unknown field "spec.clientRef.namespace"`.
 ## 14. A tenant repository cannot write into another tenant's namespace through the shared controller
 
 Control: the AppProject per team, with `destinations` limited to the team's own namespaces
-and `clusterResourceWhitelist: []`. **Not configured today.** Status: **open**.
+and `clusterResourceWhitelist: []`. Destinations are configured (owner, 2026-10-29).
+Status: **reasoned**; read the AppProject objects with the command below to record it.
 
 Why this is in scope: the tenant controller holds `admin` in every managed namespace, also
 other tenants'. A manifest in team A's repository with `metadata.namespace` set to one of
@@ -379,7 +380,7 @@ oc delete ns guard-test-a guard-test-b guard-test-c
 | 11 | tenant admin cannot change label | verified (project admin, controller) | | |
 | 12 | sharing inside namespace only | reasoned | | |
 | 13 | indirect refs cannot name a namespace | reasoned | | |
-| 14 | tenant repo cannot write into another tenant's namespace | **open, no AppProject destinations yet** | | |
+| 14 | tenant repo cannot write into another tenant's namespace | reasoned (destinations configured) | | |
 | 15 | controller nothing cluster-wide | verified | | |
 | 16 | instance secretRef reaches any namespace | reasoned | | |
 | 17 | operator version | reasoned | | |
