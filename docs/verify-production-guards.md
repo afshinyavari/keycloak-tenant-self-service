@@ -118,8 +118,8 @@ oc delete ns guard-test-a guard-test-b
 
 | Test | Result | Date |
 |---|---|---|
-| 0 guards exist | | |
-| 1 namespaced KeycloakRealm refused | | |
-| 2 other realm refused | | |
-| 3 unlabelled namespace refused | | |
-| 3b project API label change refused | | |
+| 0 guards exist | yes, both act on a cluster admin | 2026-10-29 |
+| 1 namespaced KeycloakRealm refused | denied: "KeycloakRealm is managed by the platform team and cannot be created in namespace guard-test-a" | 2026-10-29 |
+| 2 other realm refused | denied: "must be team-a in this namespace" | 2026-10-29 |
+| 3 unlabelled namespace refused | denied: "guard-test-c is not onboarded for a Keycloak realm" | 2026-10-29 |
+| 3b project API label change refused | not yet run | |
