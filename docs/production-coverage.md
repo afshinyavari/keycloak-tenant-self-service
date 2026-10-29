@@ -40,6 +40,20 @@ A refusal from a guard looks like `ValidatingAdmissionPolicy '<name>' ... denied
 <resource>`. The difference matters: a test that expects the guard but gets RBAC has not
 exercised the guard.
 
+## Running everything at once
+
+`scripts/verify.sh` runs the setup, the canaries, every test below and the cleanup, and
+prints the results table with the date filled in. It asks for the Argo CD namespace and
+takes the rest from the cluster. An unexpected answer is a FAIL row and the run continues;
+if the tests cannot run at all (not logged in, no instance, a namespace cannot be created,
+a canary fails) it cleans up and stops. Tests a person has to read are marked REVIEW.
+
+```bash
+scripts/verify.sh
+```
+
+The sections below are the same tests one by one, with what each answer means.
+
 ## Setup
 
 The tests create everything they need: two labelled namespaces, groups bound to `admin`,
