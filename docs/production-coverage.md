@@ -34,13 +34,14 @@ Status values:
 
 ## Setup
 
-No tenant is onboarded yet, so the tests use made-up tenants: two labelled namespaces,
-groups bound to `admin`, `edit` and `view` the way the onboarding will do it, and one
-unlabelled namespace with a project admin. The tenant Argo controller is tested in a
-namespace it already manages (`kafka-cluster`).
+The tests create everything they need: two labelled namespaces, groups bound to `admin`,
+`edit` and `view` the way the onboarding will do it, and one unlabelled namespace with a
+project admin. The first labelled namespace also gets the `managed-by` label, so the GitOps
+operator binds the tenant Argo controller there exactly as it does for a real tenant.
 
 ```bash
-SA=system:serviceaccount:<tenant-argo-ns>:developer-gitops-argocd-application-controller
+ARGONS=<tenant-argo-ns>          # the namespace the developer-gitops instance runs in
+SA=system:serviceaccount:$ARGONS:developer-gitops-argocd-application-controller
 INSTANCE=$(oc get clusterkeycloakinstance -o jsonpath='{.items[0].metadata.name}')
 OPNS=$(oc get clusterkeycloakinstance "$INSTANCE" -o jsonpath='{.spec.auth.passwordGrant.secretRef.namespace}')
 echo "SA=$SA INSTANCE=$INSTANCE OPNS=$OPNS"
@@ -48,7 +49,7 @@ echo "SA=$SA INSTANCE=$INSTANCE OPNS=$OPNS"
 oc create ns guard-test-a
 oc create ns guard-test-b
 oc create ns guard-test-c
-oc label ns guard-test-a keycloak/tenant=team-a
+oc label ns guard-test-a keycloak/tenant=team-a argocd.argoproj.io/managed-by=$ARGONS
 oc label ns guard-test-b keycloak/tenant=team-b
 for r in admin edit view; do
   oc create rolebinding tenant-$r -n guard-test-a --clusterrole=$r --group=team-a-$r
@@ -61,6 +62,12 @@ V="--as=team-a-user --as-group=team-a-view"
 C="--as=other-user --as-group=guard-test-admins"
 ```
 
+The GitOps operator needs a moment to create the controller's binding in guard-test-a:
+
+```bash
+oc get rolebinding -n guard-test-a | grep argocd-application-controller
+```
+
 Canaries. Each identity must be able to do something in its own namespace, otherwise a
 later "forbidden" only means a typo:
 
@@ -69,7 +76,7 @@ oc $A auth can-i create pods -n guard-test-a      # yes
 oc $E auth can-i create pods -n guard-test-a      # yes
 oc $V auth can-i list pods -n guard-test-a        # yes
 oc $C auth can-i create pods -n guard-test-c      # yes
-oc --as=$SA auth can-i create pods -n kafka-cluster   # yes
+oc --as=$SA auth can-i create pods -n guard-test-a   # yes
 ```
 
 ## R1. Tenants manage everything inside their realm
@@ -233,7 +240,7 @@ This cannot be shown with a dry-run against the API server, because the AppProje
 enforced by Argo CD, not by Kubernetes. Verify the AppProject objects instead:
 
 ```bash
-oc get appproject -n <tenant-argo-ns> -o custom-columns='NAME:.metadata.name,DESTINATIONS:.spec.destinations[*].namespace,CLUSTER:.spec.clusterResourceWhitelist'
+oc get appproject -n $ARGONS -o custom-columns='NAME:.metadata.name,DESTINATIONS:.spec.destinations[*].namespace,CLUSTER:.spec.clusterResourceWhitelist'
 ```
 
 Expected: every project lists only its own team's namespaces; the CLUSTER column is empty.
