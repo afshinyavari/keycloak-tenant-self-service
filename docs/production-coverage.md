@@ -497,27 +497,27 @@ operator added. Nothing cluster-scoped was created.
 
 ## Results
 
-| Test | Result | Date |
-|---|---|---|
-| Canaries | | |
-| R1.1 editors/admins create realm content | | |
-| R1.2 viewers read only, no secrets | | |
-| R2.1 other realm and master refused | | |
-| R2.2 unlabelled namespace refused | | |
-| R2.3 realmRef refused | | |
-| R2.4 indirect refs cannot name a namespace | | |
-| R2.5 tenant cannot change the label | | |
-| R2.6 AppProject destinations per team | | |
-| R2.7 no cluster-wide admin/edit/view groups | | |
-| R3.1 namespaced KeycloakInstance refused | | |
-| R3.2 admin Secret and operator out of reach | | |
-| R3.3 cluster instances out of reach | | |
-| R3.4 instance secretRef reach, infra repositories | | |
-| R4.1 namespaced KeycloakRealm refused | | |
-| R4.2 cluster realms out of reach | | |
-| R5 onboarding objects | | |
-| R7 guards fail closed, cover all namespaces | | |
-| R8 sharing inside namespace only | | |
-| R9 controller nothing cluster-wide | | |
-| R10.1 operator version | | |
-| R10.2 aggregated roles | | |
+| Test | Expected | Result | Date |
+|---|---|---|---|
+| Canaries | `yes` for all five identities | | |
+| R1.1 editors/admins create realm content | `yes`, `yes`, `created (server dry run)` | | |
+| R1.2 viewers read only, no secrets | `yes`, `no`, `no` | | |
+| R2.1 other realm and master refused | guard: "must be team-a in this namespace" | | |
+| R2.2 unlabelled namespace refused | `yes`, then guard: "is not onboarded" | | |
+| R2.3 realmRef refused | guard refusal mentioning `realmRef` | | |
+| R2.4 indirect refs cannot name a namespace | `unknown field "spec.clientRef.namespace"` | | |
+| R2.5 tenant cannot change the label | `Forbidden`, `field is immutable`, `Forbidden` | | |
+| R2.6 AppProject destinations per team | own namespaces only, CLUSTER empty | | |
+| R2.7 no cluster-wide admin/edit/view groups | platform service accounts only, no Group/ or User/ | | |
+| R3.1 namespaced KeycloakInstance refused | `yes`, then guard: "managed by the platform team" | | |
+| R3.2 admin Secret and operator out of reach | `no` on all four | | |
+| R3.3 cluster instances out of reach | `no`, `no` | | |
+| R3.4 instance secretRef reach, infra repositories | `namespace` in keys; only platform repositories | | |
+| R4.1 namespaced KeycloakRealm refused | `yes`, then guard: "managed by the platform team" | | |
+| R4.2 cluster realms out of reach | `no` on all five | | |
+| R5 onboarding objects | every tenant namespace labelled, one realm | | |
+| R7 guards fail closed, cover all namespaces | `Fail` on both, `Deny`, selector excludes only `$OPNS` | | |
+| R8 sharing inside namespace only | `created`, `Forbidden`, `Forbidden` | | |
+| R9 controller nothing cluster-wide | `no` on every line | | |
+| R10.1 operator version | version recorded | | |
+| R10.2 aggregated roles | one `-admin` role per Hostzero kind; RHBK decision noted | | |
