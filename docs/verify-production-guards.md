@@ -32,15 +32,14 @@ oc label ns guard-test-b keycloak/tenant=team-b
 
 ## 2. The three tests
 
-Instance name for test 1:
+Put the instance name in a variable first. The heredocs below expand it.
 
 ```bash
-oc get clusterkeycloakinstance
+INSTANCE=$(oc get clusterkeycloakinstance -o jsonpath='{.items[0].metadata.name}')
+echo "$INSTANCE"
 ```
 
 ### Test 1: a namespaced KeycloakRealm must be refused by the platform-kinds guard
-
-Replace `<instansnamn>` with the name from the command above.
 
 ```bash
 cat <<EOF | oc apply --dry-run=server -n guard-test-a -f -
@@ -50,7 +49,7 @@ metadata:
   name: guard-check
 spec:
   clusterInstanceRef:
-    name: <instansnamn>
+    name: $INSTANCE
   realmName: guard-check
   definition: {}
 EOF
