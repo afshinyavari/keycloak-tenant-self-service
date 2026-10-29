@@ -2,7 +2,9 @@
 
 For each requirement: what covers it, the commands that test it, and how to read the
 output. Every write is a server-side dry-run: RBAC and admission run exactly as for a real
-request, but nothing is stored. The only things created are the three test namespaces in
+request, but nothing is stored. Every `apply` asks for `--validate=strict`, so the server
+rejects fields that are not in the schema instead of silently dropping them; older `oc`
+clients do not ask for that by default, and R2.4 depends on it. The only things created are the three test namespaces in
 the setup, removed at the end.
 
 ## Requirements
@@ -117,7 +119,7 @@ oc --as=$SA auth can-i create pods -n guard-test-a    # yes
 ```bash
 oc $E auth can-i create keycloakusers -n guard-test-a
 oc $A auth can-i create keycloakclients -n guard-test-a
-cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
+cat <<EOF | oc $E apply --dry-run=server --validate=strict -n guard-test-a -f -
 apiVersion: keycloak.hostzero.com/v1beta1
 kind: KeycloakUser
 metadata:
@@ -153,7 +155,7 @@ oc $V auth can-i get secrets -n guard-test-a
 ### R2.1 An object cannot point at another realm, or at master
 
 ```bash
-cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
+cat <<EOF | oc $E apply --dry-run=server --validate=strict -n guard-test-a -f -
 apiVersion: keycloak.hostzero.com/v1beta1
 kind: KeycloakUser
 metadata:
@@ -176,7 +178,7 @@ EOF
 
 ```bash
 oc $C auth can-i create keycloakusers -n guard-test-c
-cat <<EOF | oc $C apply --dry-run=server -n guard-test-c -f -
+cat <<EOF | oc $C apply --dry-run=server --validate=strict -n guard-test-c -f -
 apiVersion: keycloak.hostzero.com/v1beta1
 kind: KeycloakUser
 metadata:
@@ -197,7 +199,7 @@ EOF
 ### R2.3 A tenant cannot use a namespaced realm reference
 
 ```bash
-cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
+cat <<EOF | oc $E apply --dry-run=server --validate=strict -n guard-test-a -f -
 apiVersion: keycloak.hostzero.com/v1beta1
 kind: KeycloakUser
 metadata:
@@ -222,7 +224,7 @@ they are safe because a reference has no `namespace` field and the operator reso
 the object's own namespace.
 
 ```bash
-cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
+cat <<EOF | oc $E apply --dry-run=server --validate=strict -n guard-test-a -f -
 apiVersion: keycloak.hostzero.com/v1beta1
 kind: KeycloakRole
 metadata:
@@ -238,8 +240,12 @@ EOF
 
 - `unknown field "spec.clientRef.namespace"`: the API server rejects the field; references
   cannot point across namespaces.
-- `created (server dry run)`: the schema accepts a namespace on references. Then the
-  operator's behaviour decides, and that needs a test with real objects.
+- `created (server dry run)`: either the schema accepts a namespace on references, or
+  the client did not ask for strict validation and the server pruned the field. Check the
+  schema: `oc get crd keycloakroles.keycloak.hostzero.com -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.clientRef}'`.
+  Only `name` under properties: the field was pruned, references still cannot cross
+  namespaces, and the test must be rerun with `--validate=strict`. A `namespace` property:
+  the operator's behaviour decides, and that needs a test with real objects.
 
 ### R2.5 A tenant cannot change the realm label on a namespace
 
@@ -305,7 +311,7 @@ A `KeycloakInstance` is a connection to a Keycloak server with its own credentia
 
 ```bash
 oc $E auth can-i create keycloakinstances -n guard-test-a
-cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
+cat <<EOF | oc $E apply --dry-run=server --validate=strict -n guard-test-a -f -
 apiVersion: keycloak.hostzero.com/v1beta1
 kind: KeycloakInstance
 metadata:
@@ -374,7 +380,7 @@ kind for every namespace admin; the platform-kinds guard is the only control.
 
 ```bash
 oc $E auth can-i create keycloakrealms -n guard-test-a
-cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
+cat <<EOF | oc $E apply --dry-run=server --validate=strict -n guard-test-a -f -
 apiVersion: keycloak.hostzero.com/v1beta1
 kind: KeycloakRealm
 metadata:

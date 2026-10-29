@@ -68,7 +68,9 @@ expect_absent() {
 expect_apply() {
   local pattern=$1 ident=$2 ns=$3
   STEP=$((STEP + 1))
-  local out; out=$($OC $ident apply --dry-run=server -n "$ns" -f - 2>&1)
+  # --validate=strict: the server must reject unknown fields rather than prune them silently;
+  # older oc clients do not ask for that by default, and R2.4 depends on it.
+  local out; out=$($OC $ident apply --dry-run=server --validate=strict -n "$ns" -f - 2>&1)
   if ! printf '%s\n' "$out" | grep -Eq -- "$pattern"; then
     [ -z "$CURRENT_FAIL" ] && CURRENT_FAIL="step $STEP: expected /$pattern/, got: $(first_line "$out")"
   fi
