@@ -1,10 +1,29 @@
-# Production coverage: every requirement, its control, and the test
+# Production coverage per requirement
 
-Companion to the design document `docs/superpowers/specs/2026-10-29-mirror-production-design.md`
-(local, not pushed) and to `docs/verify-production-guards.md`. For each requirement in the
-threat model this says what covers it, whether it has actually been verified on the
-production cluster, and the exact command that verifies it. Every write is a server-side
-dry-run; nothing is changed except the three throw-away namespaces created in the setup.
+Companion to `docs/superpowers/specs/2026-10-29-mirror-production-design.md` (local, not
+pushed) and to `docs/verify-production-guards.md`. For each requirement R this says what
+covers it, whether it has been verified on the production cluster, and the exact command
+that verifies it. Every write is a server-side dry-run; nothing is changed except the three
+throw-away namespaces created in the setup.
+
+## Requirements
+
+R1 to R6 are the README's. R8 is reworded for the production design (tenants hold `admin`,
+so they can manage RBAC inside their namespace). R7, R9 and R10 are new; they came out of the
+verification on 2026-10-29. Proposed for the README as well.
+
+| ID | Requirement |
+|---|---|
+| R1 | Tenants manage everything inside their realm with Kubernetes objects in their own namespaces. |
+| R2 | A tenant cannot see or change any other realm, the master realm, or realm settings owned by the platform. Enforced by the API server. |
+| R3 | Keycloak admin credentials exist only where the operator runs. Tenants cannot read them or create their own connections. |
+| R4 | Creating, renaming and deleting realms is a platform action. |
+| R5 | Onboarding a tenant is a small, repeatable set of objects with no per-tenant code. |
+| R6 | Deleting or editing an object does the expected thing, and there is a way to keep a Keycloak object when its Kubernetes object goes away. |
+| R7 | The admission guards exist, fail closed, and cover every namespace except the operator's. |
+| R8 | Tenants cannot pass rights beyond their own namespace, nor beyond what they hold themselves. |
+| R9 | The tenant Argo CD controller holds nothing cluster-wide, and no group holds admin, edit or view cluster-wide. |
+| R10 | The operator version and the roles it brings are known and documented. |
 
 Status values:
 
@@ -53,7 +72,9 @@ oc $C auth can-i create pods -n guard-test-c      # yes
 oc --as=$SA auth can-i create pods -n kafka-cluster   # yes
 ```
 
-## 1. Tenant editors and admins manage realm content in their namespaces
+## R1. Tenants manage everything inside their realm
+
+### R1.1 Editors and admins create realm content in every tenant namespace
 
 Control: OLM-generated ClusterRoles aggregated into `admin`/`edit` (the team's own
 `keycloak-realm-*` roles are a redundant subset). Status: **reasoned** for users; the
@@ -76,7 +97,7 @@ EOF
 
 Expected: `yes`, `yes`, and `keycloakuser.keycloak.hostzero.com/coverage-check created (server dry run)`.
 
-## 2. Viewers read realm content but cannot write it or read Secrets
+### R1.2 Viewers read realm content but cannot write it or read Secrets
 
 Control: OLM `-view` roles aggregated into `view`; built-in `view` excludes secrets.
 Status: **reasoned**.
@@ -87,7 +108,9 @@ oc $V auth can-i create keycloakusers -n guard-test-a   # no
 oc $V auth can-i get secrets -n guard-test-a            # no
 ```
 
-## 3. A tenant cannot point an object at another realm, or at master
+## R2. A tenant cannot reach any other realm
+
+### R2.1 An object cannot point at another realm, or at master
 
 Control: realm guard, rule 3. Status: **verified** 2026-10-29 as cluster admin
 ("must be team-a in this namespace"). Run once as a tenant editor so RBAC and admission
@@ -108,7 +131,7 @@ EOF
 
 Expected: denied by `ValidatingAdmissionPolicy`, "must be team-a in this namespace".
 
-## 4. A namespace without the label cannot reference any realm
+### R2.2 A namespace without the label cannot reference any realm
 
 Control: realm guard, rule 2. Status: **verified** 2026-10-29 as cluster admin
 ("is not onboarded for a Keycloak realm"). As the project admin of an unlabelled namespace,
@@ -130,9 +153,9 @@ EOF
 
 Expected: `yes`, then denied by `ValidatingAdmissionPolicy`, "is not onboarded".
 
-## 5. A tenant cannot use a namespaced realm reference (realmRef)
+### R2.3 A tenant cannot use a namespaced realm reference (realmRef)
 
-Control: realm guard, rule 1. Status: **reasoned** (not yet run in production).
+Control: realm guard, rule 1. Status: **reasoned**.
 
 ```bash
 cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
@@ -149,105 +172,7 @@ EOF
 
 Expected: denied by `ValidatingAdmissionPolicy`, "realmRef ... not allowed".
 
-## 6. Nobody creates a namespaced KeycloakRealm or KeycloakInstance outside the operator namespace
-
-Control: platform-kinds guard, the only control; RBAC allows it for every `admin`/`edit`
-through OLM. Status: KeycloakRealm **verified** 2026-10-29 as cluster admin;
-KeycloakInstance **reasoned**; the RBAC side verified for the controller, reasoned for users.
-
-```bash
-oc $E auth can-i create keycloakrealms -n guard-test-a      # yes: finding, RBAC allows
-oc $E auth can-i create keycloakinstances -n guard-test-a   # yes: finding, RBAC allows
-cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
-apiVersion: keycloak.hostzero.com/v1beta1
-kind: KeycloakInstance
-metadata:
-  name: coverage-check
-spec:
-  baseUrl: https://keycloak.example.com
-  auth:
-    passwordGrant:
-      secretRef:
-        name: some-secret
-EOF
-```
-
-Expected: `yes`, `yes`, then denied by `ValidatingAdmissionPolicy`, "KeycloakInstance is managed by the platform team".
-
-## 7. The guards fail closed and cover every namespace except the operator's
-
-Control: `failurePolicy: Fail` on both policies; bindings with `namespaceSelector` that
-excludes only the operator namespace; `validationActions: [Deny]`. Status: **reasoned**
-(the policies have been seen acting, their configuration has not been read).
-
-```bash
-oc get validatingadmissionpolicy -o custom-columns='NAME:.metadata.name,FAIL:.spec.failurePolicy'
-oc get validatingadmissionpolicybinding -o yaml | grep -E "name:|validationActions|values:|operator:|key:" 
-```
-
-Expected: `Fail` on both; each binding `Deny`; the selector excludes exactly `$OPNS`.
-
-## 8. A tenant cannot create, read, change or delete cluster-scoped realms and instances
-
-Control: RBAC. The OLM roles do contain these kinds, but a RoleBinding never grants
-cluster-scoped resources, and no user or group holds `admin`/`edit`/`view` through a
-ClusterRoleBinding. Status: **verified** for the controller 2026-10-29; **reasoned** for users.
-
-```bash
-for v in get list create patch delete; do printf "%-8s" $v; oc $A auth can-i $v clusterkeycloakrealms; done      # all no
-for v in get create; do printf "%-8s" $v; oc $A auth can-i $v clusterkeycloakinstances; done                    # all no
-```
-
-## 9. No group holds admin, edit or view cluster-wide
-
-Control: routine; OLM put the Keycloak kinds into these roles, so a cluster-wide binding
-is cluster-wide realm access. Status: **verified** 2026-10-29 (three platform service
-accounts, no users or groups). Re-run whenever RBAC changes:
-
-```bash
-oc get clusterrolebindings -o json | jq -r '.items[] | select(.roleRef.name=="admin" or .roleRef.name=="edit" or .roleRef.name=="view") | "\(.metadata.name): \(.roleRef.name) -> \([.subjects[]? | "\(.kind)/\(.name)"] | join(", "))"'
-```
-
-Expected: only `klusterlet-work-sa`, `template-instance-controller`, `template-instance-finalizer-controller`.
-
-## 10. A tenant cannot reach the admin credentials or the operator
-
-Control: RBAC; the admin Secret lives in `$OPNS`, where tenants have no bindings.
-Status: **reasoned**.
-
-```bash
-oc $A auth can-i get secrets -n $OPNS                      # no
-oc $A auth can-i create pods/exec -n $OPNS                 # no
-oc $A auth can-i create serviceaccounts/token -n $OPNS     # no
-oc $A auth can-i list secrets                              # no (cluster-wide)
-```
-
-## 11. A tenant cannot change the realm label on a namespace
-
-Control: RBAC on namespaces; the project API refuses label changes for everyone.
-Status: **verified** 2026-10-29 for a project admin (project API "field is immutable",
-namespace API Forbidden) and for the controller (`can-i patch namespaces` no). Tenant
-admin on its own labelled namespace:
-
-```bash
-oc $A label namespace guard-test-a keycloak/tenant=team-b --overwrite --dry-run=server   # Forbidden
-oc $A label project guard-test-a keycloak/tenant=team-b --overwrite --dry-run=server     # field is immutable
-oc $A label namespace guard-test-a keycloak/tenant- --dry-run=server                     # Forbidden
-```
-
-## 12. A tenant admin can share its own namespace, and nothing beyond it
-
-Control: Kubernetes RBAC semantics. Sharing inside the namespace is **accepted** (it stays
-inside the tenant's realm); escalation beyond the namespace or beyond `admin` is blocked by
-the API server's escalation check. Status: **reasoned**.
-
-```bash
-oc $A create rolebinding share -n guard-test-a --clusterrole=edit --group=system:authenticated --dry-run=server   # created (server dry run): accepted
-oc $A create rolebinding share -n guard-test-b --clusterrole=edit --group=system:authenticated --dry-run=server   # Forbidden
-oc $A create rolebinding esc -n guard-test-a --clusterrole=cluster-admin --group=team-a-admin --dry-run=server   # Forbidden (escalation)
-```
-
-## 13. Indirect references cannot name another namespace
+### R2.4 Indirect references cannot name another namespace
 
 Control: strict field validation on the API server, then the operator resolving references
 in the object's own namespace. Status: the API-server half is **reasoned** (testable here);
@@ -270,7 +195,20 @@ EOF
 
 Expected: rejected with `unknown field "spec.clientRef.namespace"`.
 
-## 14. A tenant repository cannot write into another tenant's namespace through the shared controller
+### R2.5 A tenant cannot change the realm label on a namespace
+
+Control: RBAC on namespaces; the project API refuses label changes for everyone.
+Status: **verified** 2026-10-29 for a project admin (project API "field is immutable",
+namespace API Forbidden) and for the controller (`can-i patch namespaces` no). Tenant
+admin on its own labelled namespace:
+
+```bash
+oc $A label namespace guard-test-a keycloak/tenant=team-b --overwrite --dry-run=server   # Forbidden
+oc $A label project guard-test-a keycloak/tenant=team-b --overwrite --dry-run=server     # field is immutable
+oc $A label namespace guard-test-a keycloak/tenant- --dry-run=server                     # Forbidden
+```
+
+### R2.6 A tenant repository cannot write into another tenant's namespace through the shared controller
 
 Control: the AppProject per team, with `destinations` limited to the team's own namespaces
 and `clusterResourceWhitelist: []`. Destinations are configured (owner, 2026-10-29).
@@ -281,17 +219,15 @@ other tenants'. A manifest in team A's repository with `metadata.namespace` set 
 team B's namespaces and `clusterRealmRef: team-b` is applied by the controller in team B's
 namespace, where the label says team-b, so the realm guard accepts it. Neither guard can
 see this: the API server sees a trusted identity writing a correctly labelled namespace.
-Only the AppProject's `destinations` stop it. (Verified 2026-10-29 that the controller has
-no cluster-wide rights, so cluster-scoped objects are already out of reach; the whitelist
-is belt and braces.)
+Only the AppProject's `destinations` stop it.
 
 Out of scope for Keycloak: Role, RoleBinding, argoproj.io kinds, ResourceQuota and
 LimitRange from a tenant repository. With `admin` the tenant's own users can already create
-Roles and RoleBindings interactively, and the escalation check keeps everything inside the
-namespace and below `admin`; the damage stays in the tenant's own namespace and realm. A
-`namespaceResourceBlacklist` is therefore optional; `argoproj.io` kinds are cheap to list
-and remove the risk of tenants bootstrapping their own Applications if
-apps-in-any-namespace is ever enabled.
+Roles and RoleBindings interactively (R8), and the damage stays in the tenant's own
+namespace and realm. A `namespaceResourceBlacklist` is therefore optional; `argoproj.io`
+kinds are cheap to list and remove the risk of tenants bootstrapping their own Applications
+if apps-in-any-namespace is ever enabled. KeycloakRealm and KeycloakInstance need not be
+listed: the platform-kinds guard refuses them for every identity (R4.1, R3.1).
 
 This cannot be shown with a dry-run against the API server, because the AppProject is
 enforced by Argo CD, not by Kubernetes. Verify the AppProject objects instead:
@@ -302,24 +238,68 @@ oc get appproject -n <tenant-argo-ns> -o custom-columns='NAME:.metadata.name,DES
 
 Expected: every project lists only its own team's namespaces; the CLUSTER column is empty.
 
-What the API server lets the controller do today, for the record (all `created (server dry run)`
-or Forbidden as noted; none of it crosses a realm):
+### R2.7 No group holds admin, edit or view cluster-wide
+
+Control: routine; OLM put the Keycloak kinds into these roles, so a cluster-wide binding
+is cluster-wide realm access (read with `view`, create with `edit`). Status: **verified**
+2026-10-29 (three platform service accounts, no users or groups). Re-run whenever RBAC
+changes:
 
 ```bash
-oc --as=$SA create rolebinding share -n kafka-cluster --clusterrole=admin --group=system:authenticated --dry-run=server   # created: inside the namespace
-oc --as=$SA create quota q -n kafka-cluster --hard=pods=1 --dry-run=server                                               # Forbidden
+oc get clusterrolebindings -o json | jq -r '.items[] | select(.roleRef.name=="admin" or .roleRef.name=="edit" or .roleRef.name=="view") | "\(.metadata.name): \(.roleRef.name) -> \([.subjects[]? | "\(.kind)/\(.name)"] | join(", "))"'
 ```
 
-## 15. The tenant controller has nothing cluster-wide
+Expected: only `klusterlet-work-sa`, `template-instance-controller`, `template-instance-finalizer-controller`.
 
-Control: the GitOps operator binds it per managed namespace only. Status: **verified**
-2026-10-29 (no on every cluster-wide check).
+## R3. Admin credentials only where the operator runs; no tenant connections
+
+### R3.1 Nobody creates a namespaced KeycloakInstance outside the operator namespace
+
+Control: platform-kinds guard, the only control; RBAC allows it for every `admin`/`edit`
+through OLM. Status: **reasoned** (the same policy was verified for KeycloakRealm, R4.1).
 
 ```bash
-for r in "patch namespaces" "create namespaces" "patch projects" "create clusterkeycloakrealms" "create clusterrolebindings" "list namespaces"; do printf "%-32s" "$r"; oc auth can-i $r --as=$SA; done
+oc $E auth can-i create keycloakinstances -n guard-test-a   # yes: finding, RBAC allows
+cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
+apiVersion: keycloak.hostzero.com/v1beta1
+kind: KeycloakInstance
+metadata:
+  name: coverage-check
+spec:
+  baseUrl: https://keycloak.example.com
+  auth:
+    passwordGrant:
+      secretRef:
+        name: some-secret
+EOF
 ```
 
-## 16. The cluster-scoped instance can read a Secret in any namespace
+Expected: `yes`, then denied by `ValidatingAdmissionPolicy`, "KeycloakInstance is managed by the platform team".
+
+### R3.2 A tenant cannot reach the admin Secret or the operator
+
+Control: RBAC; the admin Secret lives in `$OPNS`, where tenants have no bindings.
+Status: **reasoned**.
+
+```bash
+oc $A auth can-i get secrets -n $OPNS                      # no
+oc $A auth can-i create pods/exec -n $OPNS                 # no
+oc $A auth can-i create serviceaccounts/token -n $OPNS     # no
+oc $A auth can-i list secrets                              # no (cluster-wide)
+```
+
+### R3.3 A tenant cannot create or read cluster-scoped instances
+
+Control: RBAC. The OLM roles contain the kind, but a RoleBinding never grants
+cluster-scoped resources, and no user or group holds `admin`/`edit`/`view` through a
+ClusterRoleBinding (R2.7). Status: **verified** for the controller 2026-10-29; **reasoned**
+for users.
+
+```bash
+for v in get create; do printf "%-8s" $v; oc $A auth can-i $v clusterkeycloakinstances; done   # all no
+```
+
+### R3.4 The cluster-scoped instance can read a Secret in any namespace
 
 Control: only cluster admins and the infra Argo controller can create a
 `ClusterKeycloakInstance`; the platform repository is therefore a path to every Secret in
@@ -333,7 +313,105 @@ oc get applications -n openshift-gitops -o custom-columns='NAME:.metadata.name,R
 
 Expected: `namespace` among the keys; every Application in the infra instance points at a platform-owned repository.
 
-## 17. The operator version matches the lab
+## R4. Realms are a platform action
+
+### R4.1 Nobody creates a namespaced KeycloakRealm outside the operator namespace
+
+Control: platform-kinds guard, the only control; RBAC allows it for every `admin`/`edit`
+through OLM. Status: **verified** 2026-10-29 as cluster admin ("KeycloakRealm is managed by
+the platform team and cannot be created in namespace guard-test-a"); the RBAC side verified
+for the controller, reasoned for users.
+
+```bash
+oc $E auth can-i create keycloakrealms -n guard-test-a      # yes: finding, RBAC allows
+cat <<EOF | oc $E apply --dry-run=server -n guard-test-a -f -
+apiVersion: keycloak.hostzero.com/v1beta1
+kind: KeycloakRealm
+metadata:
+  name: coverage-check
+spec:
+  clusterInstanceRef:
+    name: $INSTANCE
+  realmName: coverage-check
+  definition: {}
+EOF
+```
+
+Expected: `yes`, then denied by `ValidatingAdmissionPolicy`, "managed by the platform team".
+
+### R4.2 A tenant cannot create, read, change or delete cluster-scoped realms
+
+Control: RBAC, as in R3.3. Status: **verified** for the controller 2026-10-29; **reasoned**
+for users.
+
+```bash
+for v in get list create patch delete; do printf "%-8s" $v; oc $A auth can-i $v clusterkeycloakrealms; done   # all no
+```
+
+## R5. Onboarding without per-tenant code
+
+Control: the onboarding ApplicationSet per tenant, driven by a flag and a list of
+namespaces. No cluster test; covered by reading the generated objects for one tenant once
+the first is onboarded:
+
+```bash
+oc get ns -l keycloak/tenant --show-labels
+oc get clusterkeycloakrealm
+```
+
+Expected: every namespace of the tenant carries `keycloak/tenant=<realm>`, and one
+`ClusterKeycloakRealm` with that name exists.
+
+## R6. Day-2 behaviour
+
+Control: operator behaviour and the realm guard's update path (metadata-only updates pass,
+spec changes are re-checked). Status: **lab only**. Requires real objects and a real realm;
+covered by the lab's day-2 tests, not reproducible with dry-runs.
+
+## R7. The guards exist, fail closed, and cover every namespace except the operator's
+
+Control: `failurePolicy: Fail` on both policies; bindings with a `namespaceSelector` that
+excludes only the operator namespace; `validationActions: [Deny]`. Status: **reasoned**
+(the policies have been seen acting, their configuration has not been read).
+
+```bash
+oc get validatingadmissionpolicy -o custom-columns='NAME:.metadata.name,FAIL:.spec.failurePolicy'
+oc get validatingadmissionpolicybinding -o yaml | grep -E "name:|validationActions|values:|operator:|key:"
+```
+
+Expected: `Fail` on both; each binding `Deny`; the selector excludes exactly `$OPNS`.
+
+This is the requirement to re-check on every change to the platform repository: the
+platform-kinds guard is the only thing between any project admin and any realm (R4.1).
+
+## R8. Tenants cannot pass rights beyond their own namespace
+
+Control: Kubernetes RBAC semantics. Sharing inside the namespace is **accepted** (it stays
+inside the tenant's realm, and holds for `oc` and for the tenant repository alike);
+escalation beyond the namespace or beyond `admin` is blocked by the API server's
+escalation check. Status: **reasoned**.
+
+```bash
+oc $A create rolebinding share -n guard-test-a --clusterrole=edit --group=system:authenticated --dry-run=server   # created (server dry run): accepted
+oc $A create rolebinding share -n guard-test-b --clusterrole=edit --group=system:authenticated --dry-run=server   # Forbidden
+oc $A create rolebinding esc -n guard-test-a --clusterrole=cluster-admin --group=team-a-admin --dry-run=server   # Forbidden (escalation)
+```
+
+## R9. The tenant controller holds nothing cluster-wide
+
+Control: the GitOps operator binds it per managed namespace only. Status: **verified**
+2026-10-29 (no on every cluster-wide check). The cluster-wide bindings of users and
+groups are R2.7.
+
+```bash
+for r in "patch namespaces" "create namespaces" "patch projects" "create clusterkeycloakrealms" "create clusterrolebindings" "list namespaces"; do printf "%-32s" "$r"; oc auth can-i $r --as=$SA; done
+```
+
+Expected: `no` on every line.
+
+## R10. The operator version and its roles are known and documented
+
+### R10.1 The operator version matches the lab
 
 Status: **reasoned** ("0.13.1, I think").
 
@@ -343,13 +421,7 @@ oc get csv -A | grep -i hostzero
 
 Expected: `0.13.1`. If not, pin the lab to the version shown.
 
-## 18. Day-2 behaviour: delete, preserve, offboarding, moving an existing object
-
-Control: operator behaviour and the realm guard's update path (metadata-only updates pass,
-spec changes are re-checked). Status: **lab only**. Requires real objects and a real realm;
-covered by the lab's day-2 tests, not reproducible with dry-runs.
-
-## 19. Documentation findings (no test, a decision)
+### R10.2 Documentation findings (no test, a decision)
 
 - The team's `keycloak-realm-view/edit/admin` roles are shadowed by the OLM roles and
   control nothing. Verified 2026-10-29 (`oc get clusterrole -l rbac.authorization.k8s.io/aggregate-to-admin=true`).
@@ -365,23 +437,26 @@ oc delete ns guard-test-a guard-test-b guard-test-c
 
 ## Results
 
-| # | Requirement | Status before this run | Result | Date |
-|---|---|---|---|---|
-| 1 | editors/admins create realm content | reasoned | | |
-| 2 | viewers read only, no secrets | reasoned | | |
-| 3 | other realm refused | verified (as admin) | | |
-| 4 | unlabelled namespace refused | verified (as admin) | | |
-| 5 | realmRef refused | reasoned | | |
-| 6 | namespaced KeycloakInstance refused | reasoned (KeycloakRealm verified) | | |
-| 7 | guards fail closed, cover all namespaces | reasoned | | |
-| 8 | cluster kinds out of reach for users | reasoned (controller verified) | | |
-| 9 | no cluster-wide admin/edit/view groups | verified | | |
-| 10 | admin secret and operator out of reach | reasoned | | |
-| 11 | tenant admin cannot change label | verified (project admin, controller) | | |
-| 12 | sharing inside namespace only | reasoned | | |
-| 13 | indirect refs cannot name a namespace | reasoned | | |
-| 14 | tenant repo cannot write into another tenant's namespace | reasoned (destinations configured) | | |
-| 15 | controller nothing cluster-wide | verified | | |
-| 16 | instance secretRef reaches any namespace | reasoned | | |
-| 17 | operator version | reasoned | | |
-| 18 | day-2 | lab only | | |
+| Test | Status before this run | Result | Date |
+|---|---|---|---|
+| R1.1 editors/admins create realm content | reasoned | | |
+| R1.2 viewers read only, no secrets | reasoned | | |
+| R2.1 other realm and master refused | verified (as admin) | | |
+| R2.2 unlabelled namespace refused | verified (as admin) | | |
+| R2.3 realmRef refused | reasoned | | |
+| R2.4 indirect refs cannot name a namespace | reasoned | | |
+| R2.5 tenant cannot change the label | verified (project admin, controller) | | |
+| R2.6 AppProject destinations per team | reasoned (configured) | | |
+| R2.7 no cluster-wide admin/edit/view groups | verified | | |
+| R3.1 namespaced KeycloakInstance refused | reasoned | | |
+| R3.2 admin Secret and operator out of reach | reasoned | | |
+| R3.3 cluster instances out of reach | reasoned (controller verified) | | |
+| R3.4 instance secretRef reaches any namespace | reasoned | | |
+| R4.1 namespaced KeycloakRealm refused | verified (as admin) | | |
+| R4.2 cluster realms out of reach | reasoned (controller verified) | | |
+| R5 onboarding objects | after first tenant | | |
+| R6 day-2 | lab only | | |
+| R7 guards fail closed, cover all namespaces | reasoned | | |
+| R8 sharing inside namespace only | reasoned | | |
+| R9 controller nothing cluster-wide | verified | | |
+| R10.1 operator version | reasoned | | |
